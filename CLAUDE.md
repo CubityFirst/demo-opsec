@@ -4,12 +4,15 @@ Personal CRM on a single Cloudflare Worker (Worker `opsec`, domain opsec.cubityf
 
 ## Commands
 
-- `npm run dev` — Vite + Worker in workerd, local D1/R2 under `.wrangler/state`
+- `npm run dev` — `cf dev` (Vite + Worker in workerd), local D1/R2 under `.cloudflare/state`
 - `npm test` — API tests (vitest + `@cloudflare/vitest-pool-workers`, storage is shared within a test file, so never assume an empty database)
-- `npm run typecheck` — all three TS projects (`tsconfig.app.json`, `tsconfig.worker.json`, `tsconfig.node.json`)
-- `npm run build` — must pass before deploy; emits `dist/opsec/wrangler.json` that `npx wrangler deploy` uses. `wrangler.jsonc` top level is the generic open-access template (Deploy button, self-hosters); the author's instance is `env.prod` (custom domains, OIDC via Annex, AI Gateway): build it with `npm run build:prod` (sets `CLOUDFLARE_ENV=prod`) and ship with `npm run deploy:prod`, which also applies D1 migrations. Never deploy the top-level template to the `opsec` Worker: it would switch production to open access. This includes Cloudflare Workers Builds: its build/deploy commands must be `npm run ci:build` / `npm run ci:deploy` (README → Deploying), never the defaults.
-- `run_worker_first` is `true` in `wrangler.jsonc` so the legacy-host redirect (`nexus.cubityfir.st` → `opsec.cubityfir.st`, in `src/worker/index.ts`) applies to every path; the Worker serves static files through the ASSETS binding.
-- Always call Wrangler as `npx wrangler`. Re-run `npm run types` after editing `wrangler.jsonc`.
+- `npm run typecheck` — generates Worker types (`cf workers types` → `.cloudflare/types/index.d.ts`, gitignored) then checks all three TS projects (`tsconfig.app.json`, `tsconfig.worker.json`, `tsconfig.node.json`)
+- `npm run build` — must pass before deploy; `cf build` emits the Build Output under `.cloudflare/output/v0/` that `cf deploy --prebuilt` uploads. The Worker config is **`cloudflare.config.ts`** (read by the `cf` CLI and by `@cloudflare/vite-plugin` v2; there is no Wrangler config file). Its default mode is the generic open-access template (Deploy button, self-hosters, and the `demo-opsec` Worker); the author's instance is the `prod` mode (custom domains, OIDC via Annex, AI Gateway): build it with `npm run build:prod` (`cf build --mode prod`) and ship with `npm run deploy:prod`, which also applies D1 migrations. Never deploy the default mode to the `opsec` Worker: it would switch production to open access. This includes Cloudflare Workers Builds: its build/deploy commands must be `npm run ci:build` / `npm run ci:deploy` (README → Deploying), never the defaults.
+- `assets.runWorkerFirst` is `true` in `cloudflare.config.ts` so the legacy-host redirect (`nexus.cubityfir.st` → `opsec.cubityfir.st`, in `src/worker/index.ts`) applies to every path; the Worker serves static files through the ASSETS binding.
+- `@cloudflare/vitest-pool-workers` cannot read `cloudflare.config.ts`, so `vitest.config.ts` derives the test Worker (entrypoint, compat date/flags, D1/R2 bindings) from it. New binding types need adding there.
+- D1 migrations run with `cf d1 migrations apply <database id> --dir drizzle` (see the `db:migrate:*` scripts); they share Wrangler's `d1_migrations` table.
+- `cf` and `@cloudflare/vite-plugin` (v2 beta) are pinned to matching versions (same `@cloudflare/config` / miniflare); upgrade them together.
+- Always call Wrangler as `npx wrangler` (still used for secrets: `npx wrangler secret put <NAME> --name <worker>`; `cf deploy` keeps existing secrets). Re-run `npm run types` after editing `cloudflare.config.ts` (`npm run dev` also regenerates them).
 
 ## Conventions
 
@@ -19,7 +22,7 @@ Personal CRM on a single Cloudflare Worker (Worker `opsec`, domain opsec.cubityf
 - Relationship rows mean "from is the `type` of to". `GET /contacts/:id/relationships` returns each link with `typeLabel` = the OTHER contact's role relative to the viewed contact.
 - IDs are ULIDs from `newId()`; timestamps are ISO-8601 UTC strings from `nowIso()`.
 - Schema changes: edit `src/worker/db/schema.ts` → `npm run db:generate` → review SQL → `npm run db:migrate:local`. Seed rows and anything drizzle-kit cannot model go in a custom migration (`npx drizzle-kit generate --custom --name ...`).
-- The `compatibility_date` in `wrangler.jsonc` must not exceed what the test pool's bundled workerd supports (currently 2026-08-22); raise it only after `npm test` still passes.
+- The `compatibilityDate` in `cloudflare.config.ts` must not exceed what the test pool's bundled workerd supports (currently 2026-08-22); raise it only after `npm test` still passes.
 - Avatars: `src/web/components/contacts/AvatarCropDialog.tsx` (ported from cubedocs, animated GIF → animated WebP via `lib/webpMux.ts` + `gifuct-js`) produces the 512×512 crop; the upload sends both the crop (`file`) and the untouched original (`original`). `contacts.avatar_file_id` / `avatar_original_file_id` point at the two `files` rows.
 - Social links are `contact_methods` rows with `type = "social"`, `label` = platform key and `value` = canonical profile URL. The registry (hosts, URL templates, icon names) is `src/shared/social.ts`; the API normalises on write (`socialFields` in `routes/contacts.ts`), and `SocialIcon.tsx` renders simple-icons paths (LinkedIn has no simple-icons glyph, so it gets a fallback).
 - Contact status is three-way: active, archived (`archived_at`), deceased (`deceased_at` + optional partial `deceased_on`; people and pets only, via `POST/DELETE /contacts/:id/deceased`). `listContacts` excludes deceased unless `deceased=true`, in which case `archived` is ignored. `ContactRef.deceased` is derived from `deceased_at`, so every `select({...})` that feeds `toContactRef` must use `contactRefColumns`. `search_contacts` in Ask always includes deceased contacts.

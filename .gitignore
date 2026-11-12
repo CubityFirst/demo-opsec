@@ -4,3 +4,5 @@ dist
 .dev.vars
 .env*
 *.log
+# cf build output + generated Worker types (`npm run types`)
+.cloudflare

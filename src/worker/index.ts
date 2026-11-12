@@ -122,7 +122,7 @@ app.route("/api", tokens);
 // MCP lives outside /api: it authenticates with API tokens only (see routes/mcp.ts).
 app.route("/", mcp);
 
-// Static assets normally never reach the Worker (see `assets` in wrangler.jsonc);
+// Static assets normally never reach the Worker (see `assets` in cloudflare.config.ts);
 // this is a belt-and-braces fallback for environments without the binding.
 app.get("*", async (c) => {
   if (c.env.ASSETS) return withSecurityHeaders(await c.env.ASSETS.fetch(c.req.raw));

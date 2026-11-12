@@ -25,7 +25,7 @@ export interface SessionUser {
 export type AuthMode = "open" | "oidc";
 
 /**
- * Unset or "open" is open access (see wrangler.jsonc); "oidc" enables sign-in. Any
+ * Unset or "open" is open access (see cloudflare.config.ts); "oidc" enables sign-in. Any
  * other value is a misconfiguration and fails closed with a 500 rather than
  * silently opening the instance.
  */

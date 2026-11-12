@@ -35,7 +35,8 @@ It runs as a single Cloudflare Worker at [opsec.cubityfir.st](https://opsec.cubi
 ## Stack
 
 - **Runtime**: one Cloudflare Worker (Hono JSON API) serving a React SPA as static assets
-- **Data**: D1 (SQLite) via Drizzle ORM, migrations applied with Wrangler
+- **Data**: D1 (SQLite) via Drizzle ORM, migrations applied with the `cf` CLI
+- **Config**: `cloudflare.config.ts` (the [`cf` CLI](https://developers.cloudflare.com/cf/)'s typed Worker config; there is no Wrangler config file)
 - **Files**: R2 for avatars and interaction attachments, streamed through the Worker
 - **UI**: React 19, Vite, Tailwind v4, shadcn/ui, TanStack Query, react-router
 - **Auth**: "Sign in with Annex" (OpenID Connect, Authorization Code + PKCE) via openid-client; sessions are signed cookies keyed on the `sub` claim; admin features are gated on the `roles` claim
@@ -43,7 +44,9 @@ It runs as a single Cloudflare Worker at [opsec.cubityfir.st](https://opsec.cubi
 
 ## Deploy your own
 
-The **Deploy to Cloudflare** button above forks this repository into your GitHub account and creates the Worker, a D1 database and an R2 bucket from `wrangler.jsonc`, then builds and deploys it. The deploy step runs the D1 migrations first (`npm run deploy`), so the instance is ready at its `workers.dev` URL when the build finishes. The button only asks about the handful of vars the template sets (`AUTH_MODE` and the provider label); everything else is optional and can be added later in the dashboard or with Wrangler.
+The **Deploy to Cloudflare** button above forks this repository into your GitHub account and creates the Worker, a D1 database and an R2 bucket from `cloudflare.config.ts`, then builds and deploys it. The deploy step runs the D1 migrations first (`npm run deploy`), so the instance is ready at its `workers.dev` URL when the build finishes. The button only asks about the handful of vars the template sets (`AUTH_MODE` and the provider label); everything else is optional and can be added later in the dashboard or with Wrangler.
+
+The Worker config is `cloudflare.config.ts` (the format of the new `cf` CLI). If the button does not pick it up for your fork, deploy from your own machine as described below.
 
 > **A fresh install has no authentication.** `AUTH_MODE` defaults to `open`: there is no sign-in and every visitor is treated as the owner with admin rights. That is deliberate, because everyone's identity provider is different, but it means an open instance on a public URL is an open address book. Before you put anything real in it, do one of the following.
 
@@ -55,7 +58,7 @@ After deploying:
 - Open **Account → Ask provider** to point Ask at a model provider (the deployment ships with none). Storing an API key there needs the `SESSION_SECRET` secret; a key-less provider such as an AI Gateway with BYOK or a local llama.cpp does not.
 - Optional secrets, set with `npx wrangler secret put <NAME>`: `SESSION_SECRET` (sessions and encryption of stored provider keys), `AI_API_KEY`, `AI_EXTRA_HEADERS`.
 
-To deploy from your own machine instead of the button: clone, `npm install`, `npx wrangler login`, then `npm run deploy`. Wrangler provisions the D1 database and R2 bucket named in `wrangler.jsonc` on the first deploy.
+To deploy from your own machine instead of the button: clone, `npm install`, `npx cf auth login`, set your own `accountId` and drop the `id` of the D1 binding in `cloudflare.config.ts` (and use your database ID in the `deploy` script), then `npx cf deploy`. `cf deploy` provisions the D1 database and R2 bucket named in `cloudflare.config.ts` on the first deploy; after that, `npm run deploy` also applies the D1 migrations.
 
 ## Getting started
 
@@ -63,7 +66,7 @@ To deploy from your own machine instead of the button: clone, `npm install`, `np
 npm install
 cp .dev.vars.example .dev.vars   # then fill in OIDC_CLIENT_SECRET and a random SESSION_SECRET
 npm run db:migrate:local         # apply migrations to the local D1
-npm run dev                      # Vite + Worker (local D1/R2 under .wrangler/state)
+npm run dev                      # cf dev: Vite + Worker (local D1/R2 under .cloudflare/state)
 npm run seed                     # optional sample data (dev only)
 ```
 
@@ -79,23 +82,23 @@ Two modes, chosen by the `AUTH_MODE` var:
 
 Config for `oidc` mode: vars `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `AUTH_PROVIDER_LABEL`, `ACCESS_ALLOWED_EMAILS`; secrets `OIDC_CLIENT_SECRET`, `SESSION_SECRET`. Redirect URI: `https://<host>/api/auth/callback`.
 
-The author's instance (`env.prod` in `wrangler.jsonc`) signs in through Annex, a private provider on the same Cloudflare zone. Because a Worker's fetch to a same-zone hostname skips that hostname's Worker, its token, JWKS and userinfo calls go through a service binding; that binding is optional and only used when present.
+The author's instance (the `prod` mode of `cloudflare.config.ts`) signs in through Annex, a private provider on the same Cloudflare zone. Because a Worker's fetch to a same-zone hostname skips that hostname's Worker, its token, JWKS and userinfo calls go through a service binding; that binding is optional and only used when present.
 
 ## Scripts
 
 | Script | What it does |
 |---|---|
-| `npm run dev` | Vite dev server with the Worker running in workerd |
-| `npm run build` | Typecheck (`tsc -b`) and build client + Worker into `dist/` |
-| `npm run deploy` | Build, then `npx wrangler deploy` |
+| `npm run dev` | `cf dev`: Vite dev server with the Worker running in workerd |
+| `npm run build` | Generate Worker types, typecheck (`tsc -b`), then `cf build` (client + Worker into `.cloudflare/output/`) |
+| `npm run deploy` | Build, apply D1 migrations, then `cf deploy --prebuilt` (the `demo-opsec` template Worker) |
 | `npm run db:generate` | Generate a SQL migration from `src/worker/db/schema.ts` |
 | `npm run db:migrate:local` / `db:migrate:remote` | Apply migrations to local / production D1 |
 | `npm run seed` | POST `/api/dev/seed` against the local dev server |
 | `npm test` | API tests in workerd against an isolated D1 + R2 |
 | `npm run typecheck` | Typecheck all projects |
-| `npm run types` | Regenerate `worker-configuration.d.ts` after editing `wrangler.jsonc` |
+| `npm run types` | `cf workers types`: regenerate `.cloudflare/types/index.d.ts` after editing `cloudflare.config.ts` |
 
-Wrangler is always invoked as `npx wrangler`.
+The Worker is built and deployed with the `cf` CLI. Wrangler is only used for secrets, always as `npx wrangler`.
 
 ## Project layout
 
@@ -103,7 +106,7 @@ Wrangler is always invoked as `npx wrangler`.
 src/shared/     zod input schemas + response types shared by API and UI
 src/worker/     Hono app: db/ (Drizzle schema), routes/, services/, lib/
 src/web/        React SPA (shadcn components in components/ui)
-drizzle/        SQL migrations (drizzle-kit output; wrangler migrations_dir)
+drizzle/        SQL migrations (drizzle-kit output; `cf d1 migrations apply --dir drizzle`)
 test/           vitest + @cloudflare/vitest-pool-workers API tests
 ```
 
@@ -170,13 +173,13 @@ The backend speaks the **OpenAI Chat Completions** wire format, so any compatibl
 | `AI_API_KEY` | secret | Provider key. `none` (or empty) sends **no** `Authorization` header, which is what BYOK gateways need to substitute their stored key and what llama.cpp expects |
 | `AI_EXTRA_HEADERS` | secret, optional JSON object | Extra headers, e.g. `{"cf-aig-authorization":"Bearer <token>"}` |
 
-Set vars in `wrangler.jsonc`, secrets with `npx wrangler secret put <NAME>`; locally put all of them in `.dev.vars`. These are the deployment defaults.
+Set vars in `cloudflare.config.ts` (`bindings.text(...)`), secrets with `npx wrangler secret put <NAME>`; locally put all of them in `.dev.vars`. These are the deployment defaults.
 
 **Changing the provider on the fly:** admins get an **Ask provider** card on the Account page. Pick a preset (Cloudflare AI Gateway, OpenAI, Anthropic, OpenRouter, llama.cpp, custom), fill in the base URL, model, key and any extra headers or request fields, press **Test** to run a one-token completion against the unsaved values, then **Save**. Saved settings take effect on the next question without a redeploy and override the vars above; **Use deployment settings** removes them again. They live in the `app_settings` table; the API key and extra headers are encrypted with AES-GCM under a key derived from `SESSION_SECRET` and are never returned to the browser (the UI only shows whether they are set). Rotating `SESSION_SECRET` therefore also invalidates the stored secrets; re-enter them.
 
 Presets:
 
-1. **Cloudflare AI Gateway compat + BYOK (default in `wrangler.jsonc`)** — base `https://gateway.ai.cloudflare.com/v1/<account>/opsec/compat`, model `{provider}/{model}` such as `openai/gpt-5.6-luna` (current default) or `anthropic/claude-sonnet-5`, key `none`, headers `{"cf-aig-authorization":"Bearer <AI Gateway Run token>"}`. Setup steps below. Note for `gpt-5.6-luna`: OpenAI rejects function tools on `/chat/completions` unless `reasoning_effort` is `none` (the alternative is the Responses API, which Ask does not speak), so the default sets `AI_EXTRA_BODY={"reasoning_effort":"none"}`; drop that field when using another model.
+1. **Cloudflare AI Gateway compat + BYOK (default in `cloudflare.config.ts`, `prod` mode)** — base `https://gateway.ai.cloudflare.com/v1/<account>/opsec/compat`, model `{provider}/{model}` such as `openai/gpt-5.6-luna` (current default) or `anthropic/claude-sonnet-5`, key `none`, headers `{"cf-aig-authorization":"Bearer <AI Gateway Run token>"}`. Setup steps below. Note for `gpt-5.6-luna`: OpenAI rejects function tools on `/chat/completions` unless `reasoning_effort` is `none` (the alternative is the Responses API, which Ask does not speak), so the default sets `AI_EXTRA_BODY={"reasoning_effort":"none"}`; drop that field when using another model.
 2. **AI Gateway → Anthropic compat** — base `https://gateway.ai.cloudflare.com/v1/<account>/opsec/anthropic/v1`, model `claude-sonnet-5`, same headers. Use this if the compat endpoint does not pass tool calls or images through.
 3. **Anthropic direct** — base `https://api.anthropic.com/v1`, model `claude-sonnet-5`, key = your Anthropic API key.
 4. **llama.cpp** — base `http://host:8080/v1`, key `none`, `AI_EXTRA_BODY={"parallel_tool_calls":true}` if the model supports it. Start `llama-server --jinja` with a tool-capable chat template (and `--mmproj` for images). A deployed Worker needs a tunnel (e.g. `cloudflared`) to reach a LAN box; `npm run dev` can use `localhost` directly.
@@ -186,7 +189,7 @@ Presets:
 
 Wrangler has no AI Gateway commands, so the gateway side is done in the Cloudflare dashboard.
 
-1. **Create the gateway.** Dashboard → AI → AI Gateway → *Create Gateway*, name `opsec`. The `AI_BASE_URL` in `wrangler.jsonc` already points at `…/<account>/opsec/compat`; if you pick another name, change that var.
+1. **Create the gateway.** Dashboard → AI → AI Gateway → *Create Gateway*, name `opsec`. The `AI_BASE_URL` in `cloudflare.config.ts` already points at `…/<account>/opsec/compat`; if you pick another name, change that var.
 2. **Make it authenticated.** Open the gateway → *Settings* → *Authentication*: create a token of type **AI Gateway Run**, copy it into your secret manager, and turn **Authenticated Gateway** on. BYOK requires an authenticated gateway.
 3. **Store the provider key in the gateway.** Gateway → *Provider Keys* → add the provider named in `AI_MODEL` (**OpenAI** for the default, or Anthropic), alias `default`, paste its API key. The Worker never sees this key.
 4. **Give the Worker the gateway token.** From the repo, paste the value at the prompt (never into a chat, shell history or commit):
@@ -231,33 +234,33 @@ claude mcp add opsec --transport http https://<your host>/mcp --header "Authoriz
 ## Deploying
 
 One-time: the D1 database `nexus-db` and R2 bucket `nexus-files` already exist and are
-referenced in `wrangler.jsonc` (Cloudflare cannot rename them; they keep the project's old
+referenced in `cloudflare.config.ts` (Cloudflare cannot rename them; they keep the project's old
 name). The Worker is `opsec`. The custom domains `opsec.cubityfir.st`, `opsec.nexus`, and the legacy
-`nexus.cubityfir.st` (which redirects) are created from the `routes` entries on first deploy
+`nexus.cubityfir.st` (which redirects) are created from the `domains` entries on first deploy
 (the zone must be on the same Cloudflare account).
 
 ```bash
-npm run deploy:prod        # build with CLOUDFLARE_ENV=prod, apply migrations, deploy
+npm run deploy:prod        # cf build --mode prod, apply migrations, cf deploy --prebuilt --mode prod
 curl https://opsec.cubityfir.st/api/auth/login -o /dev/null -w "%{redirect_url}\n"   # must point at the identity provider
 ```
 
-`npm run deploy` (no `:prod`) deploys the **top-level template**: open access, a fresh `opsec-db`, no
-Annex binding. Because the template and `env.prod` share the Worker name `opsec`, running it against
+`npm run deploy` (no `:prod`) deploys the **default-mode template**: open access, a fresh `opsec-db`, no
+Annex binding. If the template and the `prod` mode ever share the Worker name `opsec`, running it against
 this account silently switches production to open access and an empty database (sign-in then fails
 with "Internal error"). Only use it on a self-hosted account.
 
 ### Workers Builds (GitHub → Cloudflare)
 
 The same trap applies to the dashboard's automatic builds, whose defaults are `npm run build` and
-`npx wrangler deploy`. In **Workers & Pages → opsec → Settings → Builds**, set:
+`cf deploy`. In **Workers & Pages → opsec → Settings → Builds**, set:
 
 | Setting | Value |
 |---|---|
-| Build command | `npm run ci:build` (runs `build:prod`) |
-| Deploy command | `npm run ci:deploy` (applies D1 migrations with `--env prod`, then `npx wrangler deploy`) |
+| Build command | `npm run ci:build` (runs `build:prod`, i.e. `cf build --mode prod`) |
+| Deploy command | `npm run ci:deploy` (applies D1 migrations to `nexus-db`, then `cf deploy --prebuilt --mode prod`) |
 
-The build emits `dist/opsec/wrangler.json` already flattened to `env.prod`, and `npx wrangler deploy`
-picks it up through `.wrangler/deploy/config.json`. Secrets (`SESSION_SECRET`, `OIDC_CLIENT_SECRET`,
+The build emits the Build Output (`.cloudflare/output/v0/`) for the `prod` mode, and `cf deploy --prebuilt`
+uploads it. Secrets (`SESSION_SECRET`, `OIDC_CLIENT_SECRET`,
 `AI_API_KEY`) live on the Worker and survive deploys.
 
 ## Schema changes
